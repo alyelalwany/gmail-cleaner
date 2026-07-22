@@ -1,0 +1,16 @@
+# OAuth secrets — NEVER commit
+credentials.json
+token.json
+
+# Local rules may reference personal email addresses / senders
+rules.yaml
+
+# Build output
+/gmail-cleaner
+/bin/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store

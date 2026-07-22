@@ -1,0 +1,34 @@
+# Gmail Cleaner rules.
+#
+# Each rule maps a Gmail search query to an action.
+# `query` uses Gmail's native search syntax — the same one you'd type into
+# the search bar. Reference: https://support.google.com/mail/answer/7190
+#
+# Supported actions:
+#   trash    — move to Trash (recoverable for 30 days)
+#   delete   — permanently delete (requires --allow-delete on the CLI)
+#   archive  — remove INBOX label; message stays in All Mail
+#   label    — add a label (creates it if missing); requires `label:` field
+#
+# max_per_run caps how many messages a rule will touch per invocation.
+# Defaults to 500 if omitted.
+
+rules:
+  - name: old-promotions
+    query: "category:promotions older_than:30d"
+    action: trash
+    max_per_run: 500
+
+  - name: archive-old-github-notifications
+    query: "from:notifications@github.com is:read older_than:14d"
+    action: archive
+
+  - name: label-invoices
+    query: "subject:(invoice OR receipt) has:attachment"
+    action: label
+    label: "Finance/Invoices"
+
+  - name: nuke-noreply-newsletters
+    query: "from:noreply@newsletter.example.com older_than:90d"
+    action: delete
+    max_per_run: 100
