@@ -99,6 +99,46 @@ Once you've dry-run and trust your rules:
 
 Add `--allow-delete` if you want delete rules to fire on schedule.
 
+## Inspection Commands
+
+These commands are read-only — they never modify messages.
+
+### Stats
+
+Report message/thread counts for any label (default: INBOX):
+
+```
+gmail-cleaner stats
+gmail-cleaner stats --label TRASH
+gmail-cleaner stats --label SPAM
+gmail-cleaner stats --json
+```
+
+### Count
+
+Count messages matching any Gmail search query:
+
+```
+gmail-cleaner count "in:inbox is:unread"
+gmail-cleaner count "in:inbox from:revolut.com"
+gmail-cleaner count --json "in:trash"
+```
+
+### Top Senders
+
+Show the most frequent senders for a query — useful for identifying cleanup
+targets before writing rules:
+
+```
+gmail-cleaner top-senders
+gmail-cleaner top-senders --limit 10
+gmail-cleaner top-senders --query "in:inbox is:unread" --limit 5
+gmail-cleaner top-senders --sample 1000 --json
+```
+
+`--sample` controls how many messages to fetch metadata for (default 500).
+Higher values give a more accurate ranking but take longer.
+
 ## Actions
 
 | Action    | What it does                                          | Reversible?              |
