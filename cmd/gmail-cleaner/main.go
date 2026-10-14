@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -54,6 +55,8 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(rulesCmd())
 	root.AddCommand(runCmd(resolveDir))
 	root.AddCommand(statsCmd(resolveDir))
+	root.AddCommand(countCmd(resolveDir))
+	root.AddCommand(topSendersCmd(resolveDir))
 	root.AddCommand(labelCmd(resolveDir))
 	root.AddCommand(purgeCmd(resolveDir))
 	root.AddCommand(untrashCmd(resolveDir))
@@ -167,13 +170,19 @@ func runCmd(resolveDir func() (string, error)) *cobra.Command {
 }
 
 func statsCmd(resolveDir func() (string, error)) *cobra.Command {
-	return &cobra.Command{
+	var (
+		label  string
+		asJSON bool
+	)
+	cmd := &cobra.Command{
 		Use:   "stats",
-		Short: "Report inbox message counts (single API call, no changes).",
-		Long: "Fetches counts for the INBOX system label via users.labels.get. " +
-			"Useful as a first live smoke test after `auth` — reads mailbox metadata " +
-			"only, touches no messages.",
-		Example: "  gmail-cleaner stats",
+		Short: "Report message counts for a label (default: INBOX).",
+		Long: "Fetches counts for a label via users.labels.get. " +
+			"Reads mailbox metadata only, touches no messages.",
+		Example: "  gmail-cleaner stats\n" +
+			"  gmail-cleaner stats --label TRASH\n" +
+			"  gmail-cleaner stats --label SPAM\n" +
+			"  gmail-cleaner stats --json",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir, err := resolveDir()
 			if err != nil {
@@ -184,15 +193,135 @@ func statsCmd(resolveDir func() (string, error)) *cobra.Command {
 				return err
 			}
 			client := gmailclient.New(svc)
-			s, err := client.InboxStats(cmd.Context())
+			s, err := client.LabelStatsByName(cmd.Context(), label)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("INBOX: %d messages (%d unread), %d threads (%d unread)\n",
-				s.MessagesTotal, s.MessagesUnread, s.ThreadsTotal, s.ThreadsUnread)
+			if asJSON {
+				out := map[string]any{
+					"label":          s.Name,
+					"messagesTotal":  s.MessagesTotal,
+					"messagesUnread": s.MessagesUnread,
+					"threadsTotal":   s.ThreadsTotal,
+					"threadsUnread":  s.ThreadsUnread,
+				}
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(out)
+			}
+			fmt.Printf("%s: %d messages (%d unread), %d threads (%d unread)\n",
+				s.Name, s.MessagesTotal, s.MessagesUnread, s.ThreadsTotal, s.ThreadsUnread)
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&label, "label", "INBOX", "label to report on (e.g. INBOX, TRASH, SPAM)")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "output as JSON")
+	return cmd
+}
+
+func countCmd(resolveDir func() (string, error)) *cobra.Command {
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "count <query>",
+		Short: "Count messages matching a Gmail query.",
+		Long:  "Counts all messages matching a Gmail search query without touching them.",
+		Example: "  gmail-cleaner count \"in:inbox is:unread\"\n" +
+			"  gmail-cleaner count \"in:inbox from:revolut.com\"\n" +
+			"  gmail-cleaner count --json \"in:trash\"",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			query := args[0]
+			dir, err := resolveDir()
+			if err != nil {
+				return err
+			}
+			svc, err := auth.NewService(cmd.Context(), dir)
+			if err != nil {
+				return err
+			}
+			client := gmailclient.New(svc)
+			n, err := client.CountMessages(cmd.Context(), query)
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				out := map[string]any{"query": query, "count": n}
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(out)
+			}
+			fmt.Printf("%d message(s) match %q\n", n, query)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "output as JSON")
+	return cmd
+}
+
+func topSendersCmd(resolveDir func() (string, error)) *cobra.Command {
+	var (
+		query      string
+		limit      int
+		sampleSize int
+		asJSON     bool
+	)
+	cmd := &cobra.Command{
+		Use:   "top-senders",
+		Short: "Show the most frequent senders in your mailbox.",
+		Long: "Fetches messages matching a query, reads their From headers, and " +
+			"ranks senders by message count. Useful for identifying cleanup targets.",
+		Example: "  gmail-cleaner top-senders\n" +
+			"  gmail-cleaner top-senders --limit 10\n" +
+			"  gmail-cleaner top-senders --query \"in:inbox is:unread\"\n" +
+			"  gmail-cleaner top-senders --json --sample 1000",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir, err := resolveDir()
+			if err != nil {
+				return err
+			}
+			svc, err := auth.NewService(cmd.Context(), dir)
+			if err != nil {
+				return err
+			}
+			client := gmailclient.New(svc)
+
+			fmt.Fprintf(os.Stderr, "Scanning up to %d messages for %q...\n", sampleSize, query)
+			senders, total, err := client.TopSenders(cmd.Context(), query, sampleSize, limit)
+			if err != nil {
+				return err
+			}
+			if total == 0 {
+				fmt.Println("No messages found.")
+				return nil
+			}
+
+			if asJSON {
+				out := map[string]any{
+					"query":      query,
+					"sampled":    total,
+					"sampleSize": sampleSize,
+					"senders":    senders,
+				}
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(out)
+			}
+
+			fmt.Printf("Top senders in %q (%d messages sampled):\n\n", query, total)
+			fmt.Printf("  %-4s  %-6s  %-5s  %s\n", "Rank", "Count", "  %", "Sender")
+			fmt.Printf("  %-4s  %-6s  %-5s  %s\n", "----", "-----", "-----", "------")
+			for i, s := range senders {
+				pct := float64(s.Count) / float64(total) * 100
+				fmt.Printf("  %-4d  %-6d  %4.1f%%  %s\n", i+1, s.Count, pct, s.Sender)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&query, "query", "in:inbox", "Gmail search query to analyze")
+	cmd.Flags().IntVar(&limit, "limit", 20, "number of top senders to show")
+	cmd.Flags().IntVar(&sampleSize, "sample", 500, "max messages to fetch metadata for")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "output as JSON")
+	return cmd
 }
 
 func labelCmd(resolveDir func() (string, error)) *cobra.Command {
