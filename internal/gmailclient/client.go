@@ -7,6 +7,7 @@ package gmailclient
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -286,4 +287,74 @@ func (c *Client) CreateFilterFromSender(ctx context.Context, sender, labelID str
 		return "", false, fmt.Errorf("filters.create: %w", err)
 	}
 	return created2.Id, true, nil
+}
+
+// CountMessages returns the number of messages matching a Gmail query.
+func (c *Client) CountMessages(ctx context.Context, query string) (int, error) {
+	ids, err := c.Search(ctx, query, 0)
+	if err != nil {
+		return 0, err
+	}
+	return len(ids), nil
+}
+
+// LabelStatsByName returns counts for any label (system or user-created).
+func (c *Client) LabelStatsByName(ctx context.Context, name string) (LabelStats, error) {
+	labelID := name
+	if id, ok := systemLabelID(name); ok {
+		labelID = id
+	}
+	l, err := c.svc.Users.Labels.Get(userMe, labelID).Context(ctx).Do()
+	if err != nil {
+		return LabelStats{}, fmt.Errorf("labels.get %s: %w", name, err)
+	}
+	return LabelStats{
+		Name:           l.Name,
+		MessagesTotal:  l.MessagesTotal,
+		MessagesUnread: l.MessagesUnread,
+		ThreadsTotal:   l.ThreadsTotal,
+		ThreadsUnread:  l.ThreadsUnread,
+	}, nil
+}
+
+// SenderCount holds an aggregated sender and its message count.
+type SenderCount struct {
+	Sender string
+	Count  int
+}
+
+// TopSenders returns the most frequent senders for messages matching query.
+// It fetches metadata for up to sampleSize messages and returns the top limit senders.
+func (c *Client) TopSenders(ctx context.Context, query string, sampleSize, limit int) ([]SenderCount, int, error) {
+	ids, err := c.Search(ctx, query, sampleSize)
+	if err != nil {
+		return nil, 0, err
+	}
+	total := len(ids)
+	if total == 0 {
+		return nil, 0, nil
+	}
+
+	peeks, err := c.PeekMetadata(ctx, ids, total)
+	if err != nil {
+		return nil, total, err
+	}
+
+	counts := make(map[string]int)
+	for _, p := range peeks {
+		counts[p.From]++
+	}
+
+	sorted := make([]SenderCount, 0, len(counts))
+	for sender, count := range counts {
+		sorted = append(sorted, SenderCount{Sender: sender, Count: count})
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Count > sorted[j].Count
+	})
+
+	if limit > 0 && limit < len(sorted) {
+		sorted = sorted[:limit]
+	}
+	return sorted, total, nil
 }
