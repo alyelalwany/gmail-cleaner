@@ -5,6 +5,9 @@ token.json
 # Local rules may reference personal email addresses / senders
 rules.yaml
 
+# Cleanup tracking — contains personal inbox analysis
+CLEANUP.md
+
 # Build output
 /gmail-cleaner
 /bin/
